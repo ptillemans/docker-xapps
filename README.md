@@ -61,8 +61,9 @@ An Xclient essentially needs 2 things:
 ## SSH connections
 
 By far the easiest way to accomplish this is using *ssh -X*. This will
-create a tunnel and forward the .Xauthority file and essentially
-things just work provided the 2 hosts are more or less sanely setup.
+create a tunnel and add the cookie to the .Xauthority file and
+essentially things just work provided the 2 hosts are more or less
+sanely setup.
 
 This is the gold standard.
 
@@ -87,9 +88,13 @@ but it doesn't at the moment for one reason or another.
 ## TCP sockets
 
 For the Mac, for one reason or another, the unix socket trick does not
-work (please prove me wrong! In theory this should work, or at least
-it works for the docker unix socket.). So we tunnel it through a TCP socket
-with the swiss army knife of networking tools : *socat*
+work (see
+[this post in the docker for Mac forum](https://forums.docker.com/t/cant-connect-to-host-listening-unix-socket-from-container-vm/15526)
+. tldr; docker.sock is a special case and the rest is on the roadmap
+). So we tunnel it through a TCP socket with the swiss army knife of
+networking tools : *socat*
+
+    $ socat TCP-LISTEN:6000,reuseaddr,fork UNIX-CLIENT:\"$DISPLAY\"
 
 It essentially connects to the UNIX socket and forwards all traffic
 back and forth. This saves us setting up the Xserver to listen on the
@@ -104,12 +109,16 @@ playing with X clients in containers, and you still need to present a
 valid .Xauthority file which you can only get if you already pwned the
 Mac, I think the risk is acceptable.
 
-Note that this method would work just as well on a Linux box.
+Note that this method would work just as well on a Linux box, with the
+added advantage that we could actually bind to the *docker0* interface
+and not have to expose a port to the outside world.
 
-## Advanced XAuth magic
+## Advanced XAuth magic : remote containers
 
 In order to forward a connection from a container running on a remote
-host connected to with *ssh -X* we need to do more advanced magic.
+host connected to with *ssh -X* we need to do more advanced
+magic. We'll assume that the remote machine hosting the containers is
+a linux box. This should be by far the most common case.
 
 The ssh connection actually forwards the magic cookie and adds it to
 the remote .Xauthority file and the listens on a port for the Xclients
@@ -132,7 +141,7 @@ have the container use that address and connect the ssh socket
 to a new port where we'll be listening for connections. We'll be
 listening on port 6000 which corresponds to screen *:0*
 
-    pti@mdp1-test:~$ DOCKER_IP=`ip addr show docker0 | grep 'inet ' |
+    pti@mdp1-test:~$ DOCKER_IP=`ip addr show docker0 | grep 'inet ' | \
                                 cut -d ' ' -f6 | cut -d '/' -f1`
 
 Now we have the ip address in a variable *DOCKER_IP*
@@ -161,3 +170,79 @@ Notes:
 - Do not forget to terminate the socat process after the container has
   finished. It wont hurt, but it is ugly and will throw errors the
   next time it is started
+
+## Expansion to multiple x-clients on remote hosts
+
+First let's deal with the risk of binding to the same port. SSH has
+the same issue, and they already solved this, so let's piggyback on
+their solution. We'll derive the port number to bind to from the X
+screen number.
+
+    pti@mdp1-test:~$ DN=`echo $DISPLAY | cut -d ':' -f2 | cut -d '.' -f1`
+    pti@mdp1-test:~$ DP=$((6000 + $DN))
+    pti@mdp1-test:~$ echo $DP
+    6013
+
+This gives us a nice port number to bind to.
+
+The previous solution also assumed that the .Xauthority database only
+has a single entry. This is rather optimistic so let's improve on
+that:
+
+    pti@mdp1-test:~$ xauth list :$DN
+    mdp1-test.sensors.elex.be/unix:13  MIT-MAGIC-COOKIE-1  d8b1...
+    pti@mdp1-test:~$ COOKIE=`xauth list :$DN | cut -d ' ' -f3-`
+    pti@mdp1-test:~$ echo $COOKIE
+    MIT-MAGIC-COOKIE-1 d8b1...
+
+This isolates the entry added by the current *ssh -X* session from the
+Xauthority database and store it in the COOKIE variable.
+
+To forward the connection the socat statement now becomes
+
+    pti@mdp1-test:~$ socat TCP-LISTEN:$DP,bind=$DOCKER_IP,reuseaddr,fork \
+                           TCP:localhost:$DP &
+
+This allows every *ssh -X* session to be forwarded to its
+corresponding container(s).
+
+To launch the container use
+
+    pti@mdp1-test:~$ sudo docker run -ti \
+        -e COOKIE="$COOKIE" -e DISPLAY="$DOCKER_IP:$DN" \
+        xeyes /bin/bash
+    root@9443f36a5083:/# xauth add $DISPLAY $COOKIE
+    root@9443f36a5083:/# xeyes
+
+
+In a script this becomes
+
+    #!/bin/bash
+
+    # find X screen number and corresponding port
+    DN=`echo $DISPLAY | cut -d ':' -f2 | cut -d '.' -f1`
+    DP=$((6000 + $DN))
+
+    # get authorization cookie
+    COOKIE=`xauth list :$DN | cut -d ' ' -f3-`
+
+    # find the docker ip number for the host
+    DOCKER_IP=`ip addr show docker0 | grep 'inet ' | \
+               cut -d ' ' -f6 | cut -d '/' -f1`
+
+    # start tunnel
+    socat TCP-LISTEN:$DP,bind=$DOCKER_IP,reuseaddr,fork \
+          TCP:localhost:$DP &
+
+    SOCAT_PID=$!
+
+    # launch the container with parameters
+    sudo docker run -ti \
+        -e COOKIE="$COOKIE" -e DISPLAY="$DOCKER_IP:$DN" \
+        $*
+
+    # stop tunnel
+    kill $SOCAT_PID
+
+The script in the repo adds support for the local case using the same
+principle.

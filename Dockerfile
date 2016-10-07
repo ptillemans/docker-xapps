@@ -1,5 +1,10 @@
 FROM debian
 RUN apt-get update
-RUN apt-get install -qqy x11-apps
+RUN apt-get install -qqy x11-apps xauth xterm
+
+COPY entrypoint.sh /
+
 ENV DISPLAY :0
-CMD xeyes
+ENV COOKIE some magic X11 cookie
+
+ENTRYPOINT [ "/entrypoint.sh" ]

@@ -1,3 +1,3 @@
 #!/bin/sh
 
-docker build -t xeyes .
+docker build -t xapps .
