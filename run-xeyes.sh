@@ -12,7 +12,7 @@ then
     socat TCP-LISTEN:6000,reuseaddr,fork UNIX-CLIENT:\"$DISPLAY\" &
 fi
 
-if [ "$(uname)" == "Linux" ]
+if [ "$(uname -s)" == "Linux" ]
 then
     C_DISPLAY=":0"
     SOCKET_MOUNT="-v /tmp/.X11-unix/X0:/tmp/.X11-unix/X0"
