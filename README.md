@@ -45,10 +45,30 @@ Run the client
 Run the script:
 
 
-    $ run-xeyes.sh
+    $ ./run-xeyes.sh xapps xeyes
 
 and you should see the googly eyes, probably in the left upper corner
 of the screen.
+
+Since this script is more a technology sample it takes the following
+parameters:
+
+    run-xeyes.sh <image-name> <command> [<parameters>*]
+
+Inside the container the apps are launched with an entrypoint script
+which adds the authorization to the .Xauthority database:
+
+    #!/bin/bash
+
+    xauth add $DISPLAY $COOKIE
+
+    CMD=$1
+    shift
+
+    echo running $CMD $*
+
+    $CMD $*
+
 
 Behind the scenes
 -----------------
