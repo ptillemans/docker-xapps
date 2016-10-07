@@ -105,3 +105,59 @@ valid .Xauthority file which you can only get if you already pwned the
 Mac, I think the risk is acceptable.
 
 Note that this method would work just as well on a Linux box.
+
+## Advanced XAuth magic
+
+In order to forward a connection from a container running on a remote
+host connected to with *ssh -X* we need to do more advanced magic.
+
+The ssh connection actually forwards the magic cookie and adds it to
+the remote .Xauthority file and the listens on a port for the Xclients
+to connect to on localhost. However the containers have no access to
+the ports on localhost of the host.
+
+First lets figure out on which ip address the host has on the docker
+network where the containers are attached to :
+
+    pti@mdp1-test:~$ ip addr show docker0
+    3: docker0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP
+        link/ether 02:42:86:55:62:32 brd ff:ff:ff:ff:ff:ff
+        inet 172.17.0.1/16 scope global docker0
+           valid_lft forever preferred_lft forever
+        inet6 fe80::42:86ff:fe55:6232/64 scope link
+           valid_lft forever preferred_lft forever
+
+from the *inet* line we see that it listens on 172.17.0.1. So we'll
+have the container use that address and connect the ssh socket
+to a new port where we'll be listening for connections. We'll be
+listening on port 6000 which corresponds to screen *:0*
+
+    pti@mdp1-test:~$ DOCKER_IP=`ip addr show docker0 | grep 'inet ' |
+                                cut -d ' ' -f6 | cut -d '/' -f1`
+
+Now we have the ip address in a variable *DOCKER_IP*
+
+    pti@mdp1-test:~$ socat TCP-LISTEN:6000,bind=$DOCKER_IP,reuseaddr,fork \
+                           TCP:localhost:6011 &
+
+We launch this in the background
+
+    pti@mdp1-test:~$ DISPLAY="$DOCKER_IP:0"
+    pti@mdp1-test:~$ COOKIE=`xauth list | cut -d ' ' -f3-`
+    pti@mdp1-test:~$ sudo docker run -ti \
+        -e COOKIE="$COOKIE" -e DISPLAY="$DISPLAY" \
+        xeyes /bin/bash
+    root@9443f36a5083:/# xauth add $DISPLAY $COOKIE
+    root@9443f36a5083:/# xeyes
+
+
+Notes:
+
+- this only allows 1 xclient running at the same time. It would be
+  better to use the same port on the DOCKER_IP to for the tunnel. The
+  ssh-daemon will ensure no conflicts occur and this limitation is
+  lifted.
+
+- Do not forget to terminate the socat process after the container has
+  finished. It wont hurt, but it is ugly and will throw errors the
+  next time it is started
