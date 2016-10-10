@@ -51,5 +51,3 @@ sudo docker run -ti \
 
 # stop tunnel
 kill $SOCAT_PID
-
-killall socat
